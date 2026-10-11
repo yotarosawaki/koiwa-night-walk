@@ -309,19 +309,68 @@ const SFX = {
   over() { [64, 60, 57, 52].forEach((n, i) => tone(mtof(n), 0.4, 'sawtooth', 0.06, i * 0.25)); },
 };
 // ゆっくりで少し不気味なBGM（夜が更けるとテンポが上がる）
-const MEL = [69, null, 72, null, 76, null, 74, 72, 71, null, 68, null, 69, null, null, null, 69, null, 72, null, 77, null, 76, 74, 72, null, 71, null, 69, null, null, null];
-const BASS = [45, null, null, null, 45, null, null, null, 44, null, null, null, 45, null, null, null, 41, null, null, null, 41, null, null, null, 40, null, null, null, 45, null, null, null];
-let bgmOn = false, bgmStep = 0, bgmNext = 0;
-function bgmStart() { if (!AC) return; bgmOn = true; bgmStep = 0; bgmNext = AC.currentTime + 0.05; }
+// ===== BGM（軽快な曲：ドラム＋ベース＋コード＋メロディ） =====
+const SONG = {
+  bpm: 128, lead: 'triangle',
+  chords: [[57, [0, 3, 7]], [57, [0, 3, 7]], [53, [0, 4, 7]], [55, [0, 4, 7]], [57, [0, 3, 7]], [57, [0, 3, 7]], [50, [0, 3, 7]], [52, [0, 4, 7]]],
+  mel: `A4 . . C5 . . E5 . D5 . C5 . A4 . . . | C5 . . E5 . . A5 . G5 . E5 . . . . . | F5 . . E5 . . C5 . A4 . C5 . F5 . . . | G5 . . F5 . . D5 . B4 . D5 . G5 . . .
+        A5 . G5 . E5 . C5 . E5 . G5 . A5 . . . | C6 . . B5 . . A5 . E5 . . . . . . . | D5 . F5 . A5 . F5 . D5 . F5 . A5 . C6 . | B5 . . . G#5 . . . E5 . . . . . . .`,
+  bass: [0, null, null, 12, null, null, 0, null, 0, null, null, 12, null, null, 7, null],
+  kick: 'x.....x...x.....', snare: '....x.......x...', hat: 'x.x.x.x.x.x.x.x.', stab: '...x.....x...x..',
+};
+const NOTE_NUM = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+function parseMel(s) {
+  return s.replace(/\|/g, ' ').trim().split(/\s+/).map(tk => {
+    if (tk === '.') return null;
+    const m = tk.match(/^([A-G])([#b]?)(\d)$/);
+    return 12 * (+m[3] + 1) + NOTE_NUM[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+  });
+}
+const SONG_MEL = parseMel(SONG.mel);
+let bgmOn = false, bgmStep = 0, bgmNext = 0, noiseBuf = null;
+function bgmStart() { if (!AC) return; bgmOn = true; bgmStep = 0; bgmNext = AC.currentTime + 0.06; }
 function bgmStop() { bgmOn = false; }
+function bnote(f, dur, type, vol, when, vib) {
+  const t = AC.currentTime + when, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (vib) { const l = AC.createOscillator(), lg = AC.createGain(); l.frequency.value = 6; lg.gain.value = f * 0.006; l.connect(lg); lg.connect(o.frequency); l.start(t); l.stop(t + dur + 0.05); }
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(vol * 0.6, t + dur * 0.5); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.05);
+}
+function drum(kind, when) {
+  const t = AC.currentTime + when;
+  if (kind === 'k') {
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    g.gain.setValueAtTime(0.32, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.2);
+    return;
+  }
+  if (!noiseBuf) { const n = AC.sampleRate * 0.3; noiseBuf = AC.createBuffer(1, n, AC.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1; }
+  const src = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+  src.buffer = noiseBuf; f.type = 'highpass';
+  const dur = kind === 's' ? 0.14 : 0.035;
+  f.frequency.value = kind === 's' ? 1400 : 7000;
+  g.gain.setValueAtTime(kind === 's' ? 0.16 : 0.05, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f); f.connect(g); g.connect(master); src.start(t); src.stop(t + dur + 0.02);
+  if (kind === 's') { const o = AC.createOscillator(), og = AC.createGain(); o.frequency.value = 190; og.gain.setValueAtTime(0.08, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.08); o.connect(og); og.connect(master); o.start(t); o.stop(t + 0.1); }
+}
 function bgmTick(rate) {
   if (!bgmOn || !AC || muted) { if (AC) bgmNext = AC.currentTime + 0.05; return; }
-  const dur = 0.2 / rate;
+  const st = 60 / SONG.bpm / 4 / rate;                      // 16分音符の長さ
   while (bgmNext < AC.currentTime + 0.15) {
-    const w = bgmNext - AC.currentTime, i = bgmStep % 32;
-    if (MEL[i] != null) tone(mtof(MEL[i]), dur * 1.6, 'triangle', 0.045, w);
-    if (BASS[i] != null) tone(mtof(BASS[i]), dur * 3.5, 'sine', 0.1, w);
-    bgmStep++; bgmNext += dur;
+    const w = Math.max(0, bgmNext - AC.currentTime), i = bgmStep % SONG_MEL.length, s = i % 16, bar = Math.floor(i / 16);
+    const [root, iv] = SONG.chords[bar % SONG.chords.length];
+    if (SONG.kick[s] === 'x') drum('k', w);
+    if (SONG.snare[s] === 'x') drum('s', w);
+    if (SONG.hat[s] === 'x') drum('h', w);
+    const b = SONG.bass[s];
+    if (b != null) bnote(mtof(root - 12 + b), st * 1.7, 'triangle', 0.16, w);
+    if (SONG.stab[s] === 'x') for (const k of iv) bnote(mtof(root + k), st * 1.1, 'square', 0.016, w);
+    const m = SONG_MEL[i];
+    if (m != null) bnote(mtof(m), st * 1.9, SONG.lead, 0.05, w, true);
+    bgmStep++; bgmNext += st;
   }
 }
 
